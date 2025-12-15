@@ -99,9 +99,10 @@ class GlobeNewswireDataOperations:
         AND source = 'globenewswire'
         """
         
-        result = self.db.execute_query(query, (competitor_id, title, url))
-        
-        return result and result[0][0] > 0
+        with self.db.get_cursor() as cursor:
+            cursor.execute(query, (competitor_id, title, url))
+            row = cursor.fetchone()
+            return row and row[0] > 0
     
     def _save_article(self, competitor_id: int, article_data: Dict) -> bool:
         """
@@ -167,7 +168,9 @@ class GlobeNewswireDataOperations:
                 analysis_data.get('confidence_score', 0.0)
             )
             
-            self.db.execute_update(query, values)
+            with self.db.get_cursor() as cursor:
+                cursor.execute(query, values)
+            
             print(f"✅ Saved article: {article_data.get('title', '')[:50]}...")
             return True
             
@@ -256,22 +259,24 @@ class GlobeNewswireDataOperations:
             """
             values = (days, limit)
         
-        result = self.db.execute_query(query, values)
-        
         articles = []
-        if result:
-            for row in result:
-                articles.append({
-                    'title': row[0],
-                    'url': row[1],
-                    'content': row[2],
-                    'published_date': row[3],
-                    'source': row[4],
-                    'summary': row[5],
-                    'sentiment': row[6], 
-                    'key_topics': row[7],
-                    'company_name': row[8]
-                })
+        with self.db.get_cursor() as cursor:
+            cursor.execute(query, values)
+            rows = cursor.fetchall()
+            
+            if rows:
+                for row in rows:
+                    articles.append({
+                        'title': row[0],
+                        'url': row[1],
+                        'content': row[2],
+                        'published_date': row[3],
+                        'source': row[4],
+                        'summary': row[5],
+                        'sentiment': row[6], 
+                        'key_topics': row[7],
+                        'company_name': row[8]
+                    })
         
         return articles
     
@@ -313,17 +318,22 @@ class GlobeNewswireDataOperations:
             """
             values = None
         
-        result = self.db.execute_query(query, values)
-        
-        if result and result[0]:
-            return {
-                'total_articles': result[0][0] or 0,
-                'companies_covered': result[0][1] or 0,
-                'avg_confidence': round(result[0][2] or 0.0, 2),
-                'positive_articles': result[0][3] or 0,
-                'negative_articles': result[0][4] or 0,
-                'neutral_articles': result[0][5] or 0
-            }
+        with self.db.get_cursor() as cursor:
+            if values:
+                cursor.execute(query, values)
+            else:
+                cursor.execute(query)
+            row = cursor.fetchone()
+            
+            if row:
+                return {
+                    'total_articles': row[0] or 0,
+                    'companies_covered': row[1] or 0,
+                    'avg_confidence': round(row[2] or 0.0, 2),
+                    'positive_articles': row[3] or 0,
+                    'negative_articles': row[4] or 0,
+                    'neutral_articles': row[5] or 0
+                }
         
         return {
             'total_articles': 0,
