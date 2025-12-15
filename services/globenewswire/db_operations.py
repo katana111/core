@@ -39,14 +39,16 @@ class GlobeNewswireDataOperations:
         LIMIT 1
         """
         
-        result = self.db.execute_query(query, (name,))
-        
-        if result and len(result) > 0:
-            return {
-                'id': result[0][0],
-                'name': result[0][1], 
-                'website': result[0][2]
-            }
+        with self.db.get_cursor() as cursor:
+            cursor.execute(query, (name,))
+            row = cursor.fetchone()
+            
+            if row:
+                return {
+                    'id': row[0],
+                    'name': row[1], 
+                    'website': row[2]
+                }
         
         return None
     
@@ -63,16 +65,18 @@ class GlobeNewswireDataOperations:
         ORDER BY name
         """
         
-        result = self.db.execute_query(query)
-        
         competitors = []
-        if result:
-            for row in result:
-                competitors.append({
-                    'id': row[0],
-                    'name': row[1],
-                    'website': row[2]
-                })
+        with self.db.get_cursor() as cursor:
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            
+            if rows:
+                for row in rows:
+                    competitors.append({
+                        'id': row[0],
+                        'name': row[1],
+                        'website': row[2]
+                    })
         
         return competitors
     
