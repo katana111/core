@@ -7,6 +7,7 @@ import asyncio
 import re
 from typing import List, Dict, Optional
 from urllib.parse import quote
+from datetime import datetime, timedelta
 from playwright.async_api import async_playwright, Browser, Page
 
 
@@ -59,6 +60,27 @@ class GlobeNewswireScraper:
         text = re.sub(r'\s+', ' ', text.strip())
         return text
     
+    def _is_recent_article(self, date_str: str, months_back: int = 3) -> bool:
+        """
+        Check if article is within the specified months from current date
+        
+        Args:
+            date_str: Date string in YYYY-MM-DD format
+            months_back: Number of months to look back
+            
+        Returns:
+            True if article is recent, False otherwise
+        """
+        if not date_str:
+            return True  # Include articles without dates to be safe
+        
+        try:
+            article_date = datetime.strptime(date_str, '%Y-%m-%d')
+            cutoff_date = datetime.now() - timedelta(days=months_back * 30)  # Approximate months
+            return article_date >= cutoff_date
+        except:
+            return True  # Include articles with unparseable dates to be safe
+    
     def _extract_date(self, date_text: str) -> Optional[str]:
         """
         Extract and normalize date from GlobeNewswire date format
@@ -101,14 +123,56 @@ class GlobeNewswireScraper:
             return None
         except Exception:
             return None
-    
-    async def search_company_news(self, company_name: str, max_articles: int = 10) -> List[Dict]:
         """
-        Search for company news on GlobeNewswire
+        Extract and normalize date from GlobeNewswire date format
+        
+        Args:
+            date_text: Raw date text like "December 09, 2025 06:01 ET"
+            
+        Returns:
+            Normalized date string in YYYY-MM-DD format or None
+        """
+        if not date_text:
+            return None
+        
+        try:
+            # GlobeNewswire format: "December 09, 2025 06:01 ET"
+            # Extract the date part before time
+            date_part = date_text.split(' ET')[0].strip()
+            
+            # Remove time if present (HH:MM)
+            date_part = re.sub(r'\s+\d{2}:\d{2}$', '', date_part)
+            
+            # Convert month names to numbers
+            months = {
+                'January': '01', 'February': '02', 'March': '03', 'April': '04',
+                'May': '05', 'June': '06', 'July': '07', 'August': '08',
+                'September': '09', 'October': '10', 'November': '11', 'December': '12'
+            }
+            
+            # Parse format like "December 09, 2025"
+            parts = date_part.replace(',', '').split()
+            if len(parts) >= 3:
+                month_name = parts[0]
+                day = parts[1].zfill(2)
+                year = parts[2]
+                
+                if month_name in months:
+                    month = months[month_name]
+                    return f"{year}-{month}-{day}"
+            
+            return None
+        except Exception:
+            return None
+    
+    async def search_company_news(self, company_name: str, max_articles: int = 10, months_back: int = 3) -> List[Dict]:
+        """
+        Search for company news on GlobeNewswire with pagination and date filtering
         
         Args:
             company_name: Name of the company to search for
             max_articles: Maximum number of articles to return
+            months_back: Only include articles from last N months
             
         Returns:
             List of article dictionaries with title, url, content, date, etc.
@@ -117,81 +181,132 @@ class GlobeNewswireScraper:
             raise RuntimeError("Browser not started. Use async context manager or call start_browser()")
         
         articles = []
+        page_num = 1
+        max_pages = 10  # Safety limit to prevent infinite loops
         
         try:
-            # Construct search URL
-            search_url = f"https://www.globenewswire.com/search/keyword/{quote(company_name)}"
-            print(f"🔍 Searching GlobeNewswire for: {company_name}")
-            print(f"🌐 URL: {search_url}")
+            print(f"🔍 Searching GlobeNewswire for: {company_name} (last {months_back} months)")
             
-            # Navigate to search results
-            await self.page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-            await asyncio.sleep(self.delay)
-            
-            # Wait for search results to load
-            try:
-                await self.page.wait_for_selector('div[class*="news-article"]', timeout=10000)
-            except:
-                # Try alternative selectors if the first one fails
+            while len(articles) < max_articles and page_num <= max_pages:
+                # Construct search URL with page parameter
+                if page_num == 1:
+                    search_url = f"https://www.globenewswire.com/search/keyword/{quote(company_name)}"
+                else:
+                    search_url = f"https://www.globenewswire.com/search/keyword/{quote(company_name)}/load/more?page={page_num}&pageSize=10"
+                
+                print(f"🌐 Fetching page {page_num}: {search_url}")
+                
+                # Navigate to search results
+                await self.page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+                await asyncio.sleep(self.delay)
+                
+                # Wait for search results to load
                 try:
-                    await self.page.wait_for_selector('a[href*="/news-release/"]', timeout=5000)
+                    if page_num == 1:
+                        await self.page.wait_for_selector('a[href*="/news-release/"]', timeout=10000)
+                    else:
+                        # For pagination, wait a bit longer as content loads dynamically
+                        await asyncio.sleep(2)
                 except:
-                    print(f"⚠️  No search results found for {company_name}")
-                    return articles
-            
-            # Extract article links and basic info from search results
-            article_elements = await self.page.query_selector_all('a[href*="/news-release/"]')
-            
-            print(f"📰 Found {len(article_elements)} potential articles")
-            
-            # Process each article (up to max_articles)
-            processed = 0
-            for element in article_elements:
-                if processed >= max_articles:
+                    print(f"⚠️  No search results found on page {page_num}")
                     break
                 
-                try:
-                    # Get article URL
-                    article_url = await element.get_attribute('href')
-                    if not article_url or not article_url.startswith('http'):
-                        if article_url and article_url.startswith('/'):
-                            article_url = f"https://www.globenewswire.com{article_url}"
-                        else:
-                            continue
-                    
-                    # Extract basic info from search result
-                    title_element = await element.query_selector('text=')
-                    if title_element:
-                        title = await title_element.text_content()
-                        title = self._clean_text(title)
-                    else:
-                        title = "No title found"
-                    
-                    # Get the parent container to find date info
-                    parent = await element.query_selector('xpath=ancestor::*[contains(text(), "ET") or contains(text(), "2025") or contains(text(), "2024")]')
-                    date_text = ""
-                    if parent:
-                        parent_text = await parent.text_content()
-                        # Look for date pattern in parent text
-                        date_match = re.search(r'[A-Z][a-z]+ \d{1,2}, 202[45] \d{2}:\d{2} ET', parent_text)
-                        if date_match:
-                            date_text = date_match.group(0)
-                    
-                    # Process the full article
-                    article_data = await self._scrape_full_article(article_url, title, date_text, company_name)
-                    if article_data:
-                        articles.append(article_data)
-                        processed += 1
-                        print(f"✅ Scraped article {processed}: {article_data['title'][:50]}...")
-                    
-                    # Add delay between articles
-                    await asyncio.sleep(self.delay)
+                # Extract article links and basic info from search results
+                article_elements = await self.page.query_selector_all('a[href*="/news-release/"]')
                 
-                except Exception as e:
-                    print(f"⚠️  Error processing article: {e}")
-                    continue
+                if not article_elements:
+                    print(f"📄 No more articles found on page {page_num}")
+                    break
+                
+                print(f"📰 Found {len(article_elements)} potential articles on page {page_num}")
+                
+                # Track articles found on this page to detect when to stop
+                page_articles_processed = 0
+                articles_found_on_page = 0
+                
+                # Process each article on this page
+                for element in article_elements:
+                    if len(articles) >= max_articles:
+                        break
+                    
+                    try:
+                        # Get article URL
+                        article_url = await element.get_attribute('href')
+                        if not article_url or not article_url.startswith('http'):
+                            if article_url and article_url.startswith('/'):
+                                article_url = f"https://www.globenewswire.com{article_url}"
+                            else:
+                                continue
+                        
+                        # Skip if we've already processed this URL
+                        if any(art['url'] == article_url for art in articles):
+                            continue
+                        
+                        # Extract basic info from search result
+                        title = await element.text_content()
+                        title = self._clean_text(title) if title else "No title found"
+                        
+                        # Find date in the parent elements or surrounding text
+                        date_text = ""
+                        try:
+                            # Look for date patterns in the page
+                            page_content = await self.page.content()
+                            # Find date near the article link
+                            url_index = page_content.find(article_url)
+                            if url_index > 0:
+                                # Look in surrounding text for date pattern
+                                surrounding_text = page_content[max(0, url_index-500):url_index+500]
+                                date_match = re.search(r'[A-Z][a-z]+ \d{1,2}, 202[4-5] \d{2}:\d{2} ET', surrounding_text)
+                                if date_match:
+                                    date_text = date_match.group(0)
+                        except:
+                            pass
+                        
+                        # Quick date filter before full article processing
+                        if date_text:
+                            article_date = self._extract_date(date_text)
+                            if article_date and not self._is_recent_article(article_date, months_back):
+                                print(f"📅 Skipping old article: {title[:50]}... ({article_date})")
+                                continue
+                        
+                        # Process the full article
+                        article_data = await self._scrape_full_article(article_url, title, date_text, company_name)
+                        if article_data:
+                            # Final date check after full processing
+                            if article_data['published_date'] and not self._is_recent_article(article_data['published_date'], months_back):
+                                print(f"📅 Skipping old article after processing: {article_data['title'][:50]}... ({article_data['published_date']})")
+                                continue
+                            
+                            # Add company context to the article data
+                            article_data['target_company'] = company_name
+                            articles.append(article_data)
+                            articles_found_on_page += 1
+                            page_articles_processed += 1
+                            print(f"✅ Scraped article {len(articles)}: {article_data['title'][:50]}... ({article_data.get('published_date', 'no date')})")
+                        
+                        page_articles_processed += 1
+                        
+                        # Add delay between articles
+                        await asyncio.sleep(self.delay)
+                    
+                    except Exception as e:
+                        print(f"⚠️  Error processing article: {e}")
+                        continue
+                
+                # Check if we should continue to next page
+                if articles_found_on_page == 0 and page_articles_processed > 0:
+                    print(f"📄 No new articles found on page {page_num} (all were old or duplicates)")
+                    break
+                elif len(article_elements) < 5:  # If very few articles on page, likely at end
+                    print(f"📄 Reached end of results (only {len(article_elements)} articles on page {page_num})")
+                    break
+                
+                page_num += 1
+                
+                # Add delay between pages
+                await asyncio.sleep(self.delay * 2)
             
-            print(f"📊 Successfully scraped {len(articles)} articles for {company_name}")
+            print(f"📊 Successfully scraped {len(articles)} recent articles for {company_name} (from {page_num-1} pages)")
             
         except Exception as e:
             print(f"❌ Error searching GlobeNewswire for {company_name}: {e}")

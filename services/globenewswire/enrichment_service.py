@@ -13,7 +13,8 @@ from services.globenewswire.db_operations import GlobeNewswireDataOperations
 async def enrich_competitors_with_globenewswire(
     competitor_names: List[str] = None, 
     analyze_news: bool = True,
-    max_articles_per_company: int = 10
+    max_articles_per_company: int = 10,
+    months_back: int = 3
 ) -> Dict:
     """
     Enrich competitors with GlobeNewswire news articles
@@ -22,6 +23,7 @@ async def enrich_competitors_with_globenewswire(
         competitor_names: List of competitor names to process (if None, processes all)
         analyze_news: Whether to use AI analysis for articles
         max_articles_per_company: Maximum articles to scrape per company
+        months_back: Only include articles from last N months (default: 3)
         
     Returns:
         Dictionary with processing results and statistics
@@ -56,6 +58,7 @@ async def enrich_competitors_with_globenewswire(
     print(f"🚀 Starting GlobeNewswire enrichment for {len(competitors)} competitors...")
     print(f"🤖 AI analysis: {'enabled' if analyze_news else 'disabled'}")
     print(f"📊 Max articles per company: {max_articles_per_company}")
+    print(f"📅 Date range: Last {months_back} months")
     
     total_articles_found = 0
     total_articles_saved = 0
@@ -71,7 +74,8 @@ async def enrich_competitors_with_globenewswire(
                 # Scrape articles for this competitor
                 articles = await scraper.search_company_news(
                     competitor['name'],
-                    max_articles=max_articles_per_company
+                    max_articles=max_articles_per_company,
+                    months_back=months_back
                 )
                 
                 if not articles:
@@ -145,16 +149,18 @@ async def enrich_competitors_with_globenewswire(
 class GlobeNewswireEnrichmentService:
     """Service class for batch GlobeNewswire enrichment operations"""
     
-    def __init__(self, analyze_news: bool = True, max_articles_per_company: int = 10):
+    def __init__(self, analyze_news: bool = True, max_articles_per_company: int = 10, months_back: int = 3):
         """
         Initialize the enrichment service
         
         Args:
             analyze_news: Whether to use AI analysis
             max_articles_per_company: Maximum articles to scrape per company
+            months_back: Only include articles from last N months
         """
         self.analyze_news = analyze_news
         self.max_articles_per_company = max_articles_per_company
+        self.months_back = months_back
         self.db_ops = GlobeNewswireDataOperations(analyze_news=analyze_news)
     
     async def enrich_all_competitors(self) -> Dict:
@@ -167,7 +173,8 @@ class GlobeNewswireEnrichmentService:
         return await enrich_competitors_with_globenewswire(
             competitor_names=None,
             analyze_news=self.analyze_news,
-            max_articles_per_company=self.max_articles_per_company
+            max_articles_per_company=self.max_articles_per_company,
+            months_back=self.months_back
         )
     
     async def enrich_specific_competitors(self, competitor_names: List[str]) -> Dict:
@@ -183,7 +190,8 @@ class GlobeNewswireEnrichmentService:
         return await enrich_competitors_with_globenewswire(
             competitor_names=competitor_names,
             analyze_news=self.analyze_news,
-            max_articles_per_company=self.max_articles_per_company
+            max_articles_per_company=self.max_articles_per_company,
+            months_back=self.months_back
         )
     
     async def enrich_competitor(self, competitor_name: str) -> Dict:

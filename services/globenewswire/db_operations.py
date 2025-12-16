@@ -95,8 +95,7 @@ class GlobeNewswireDataOperations:
         query = """
         SELECT COUNT(*) FROM competitors_news 
         WHERE competitor_id = %s 
-        AND (title = %s OR url = %s)
-        AND source = 'globenewswire'
+        AND (title = %s OR link = %s)
         """
         
         with self.db.get_cursor() as cursor:
@@ -122,56 +121,121 @@ class GlobeNewswireDataOperations:
                 return False
             
             # Analyze article with AI if enabled
-            analysis_data = {}
             if self.analyzer:
+                company_name = article_data.get('competitor_name', article_data.get('target_company', 'Unknown'))
                 print(f"🤖 Analyzing article with AI: {article_data.get('title', '')[:50]}...")
-                analysis = self.analyzer.analyze_news_article(
+                
+                analysis = self.analyzer.analyze_article(
+                    article_data.get('title', ''),
                     article_data.get('content', ''),
-                    article_data.get('title', '')
+                    company_name
                 )
                 
                 # Check if article is business-relevant
-                if not analysis.get('is_business_relevant', True):
-                    print(f"📰 Skipping non-business article: {article_data.get('title', '')[:50]}...")
+                if not analysis.get('relevant', True):
+                    print(f"📰 Skipping non-business article: {analysis.get('reason', 'not business relevant')}")
                     return False
                 
-                analysis_data = {
-                    'summary': analysis.get('summary', ''),
-                    'sentiment': analysis.get('sentiment', 'neutral'),
-                    'key_topics': ', '.join(analysis.get('key_topics', [])),
-                    'business_impact': analysis.get('business_impact', ''),
-                    'confidence_score': analysis.get('confidence_score', 0.0)
-                }
+                # Create company-specific title
+                company_focused_title = analysis.get('title', article_data.get('title', ''))
+                if company_focused_title == article_data.get('title', '') and company_name.lower() in company_focused_title.lower():
+                    # Title already mentions company, keep as is
+                    final_title = company_focused_title
+                elif company_name != 'Unknown' and company_name.lower() not in company_focused_title.lower():
+                    # Add company context to title if not present
+                    final_title = f"{company_name}: {company_focused_title}"
+                else:
+                    final_title = company_focused_title
+                
+                # Create company-focused analysis
+                main_idea = analysis.get('main_idea', 'No summary available')
+                company_analysis = analysis.get('analysis', '')
+                
+                # Filter analysis to focus on the target company
+                if company_name != 'Unknown':
+                    company_focused_analysis = f"Impact on {company_name}: {company_analysis}\n\nKey Details: {main_idea}"
+                else:
+                    company_focused_analysis = f"{main_idea}\n\nAnalysis: {company_analysis}"
+                
+                sentiment = analysis.get('sentiment', 'neutral')
+                
+                # Convert business impact to importance grade
+                business_impact = analysis.get('business_impact', 'medium')
+                if business_impact == 'high':
+                    importance = 5
+                elif business_impact == 'medium':
+                    importance = 3
+                else:
+                    importance = 1
+            else:
+                company_name = article_data.get('competitor_name', article_data.get('target_company', 'Unknown'))
+                original_title = article_data.get('title', '')
+                
+                # Create company-specific title without AI
+                if company_name != 'Unknown' and company_name.lower() not in original_title.lower():
+                    final_title = f"{company_name}: {original_title}"
+                else:
+                    final_title = original_title
+                    
+                company_focused_analysis = f"Article about {company_name}: {original_title}"
+                sentiment = 'neutral'
+                importance = 3
             
-            # Insert article into database
+            # Insert article into database using the actual schema
             query = """
             INSERT INTO competitors_news (
-                competitor_id, title, url, content, published_date, source,
-                summary, sentiment, key_topics, business_impact, confidence_score,
-                created_at
+                competitor_id, title, link, analysis, importance_grade, sentiment, date, created_at, updated_at
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW()
+                %s, %s, %s, %s, %s, %s, %s, NOW(), NOW()
             )
             """
             
-            values = (
-                competitor_id,
-                article_data.get('title', ''),
-                article_data.get('url', ''),
-                article_data.get('content', ''),
-                article_data.get('published_date'),
-                'globenewswire',
-                analysis_data.get('summary', ''),
-                analysis_data.get('sentiment', 'neutral'),
-                analysis_data.get('key_topics', ''),
-                analysis_data.get('business_impact', ''),
-                analysis_data.get('confidence_score', 0.0)
-            )
+            # Parse published date or use current date
+            published_date = article_data.get('published_date')
+            if published_date:
+                # Try to convert to proper timestamp
+                try:
+                    from datetime import datetime
+                    if isinstance(published_date, str):
+                        # Try parsing the date string
+                        import dateutil.parser
+                        parsed_date = dateutil.parser.parse(published_date)
+                        published_date = parsed_date.strftime('%Y-%m-%d %H:%M:%S')
+                except:
+                    published_date = None
+            
+            if not published_date:
+                published_date = 'NOW()'
+                values = (
+                    competitor_id,
+                    final_title,
+                    article_data.get('url', ''),
+                    company_focused_analysis,
+                    importance,
+                    sentiment
+                )
+                query = """
+                INSERT INTO competitors_news (
+                    competitor_id, title, link, analysis, importance_grade, sentiment, date, created_at, updated_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, NOW(), NOW(), NOW()
+                )
+                """
+            else:
+                values = (
+                    competitor_id,
+                    final_title,
+                    article_data.get('url', ''),
+                    company_focused_analysis,
+                    importance,
+                    sentiment,
+                    published_date
+                )
             
             with self.db.get_cursor() as cursor:
                 cursor.execute(query, values)
             
-            print(f"✅ Saved article: {article_data.get('title', '')[:50]}...")
+            print(f"✅ Saved article: {final_title[:50]}...")
             return True
             
         except Exception as e:
@@ -203,6 +267,8 @@ class GlobeNewswireDataOperations:
         
         saved_count = 0
         for article in articles:
+            # Add competitor context to article data
+            article['competitor_name'] = competitor_name
             if self._save_article(competitor['id'], article):
                 saved_count += 1
         
@@ -235,26 +301,22 @@ class GlobeNewswireDataOperations:
         """
         if competitor_name:
             query = """
-            SELECT cn.title, cn.url, cn.content, cn.published_date, cn.source,
-                   cn.summary, cn.sentiment, cn.key_topics, c.name as company_name
+            SELECT cn.title, cn.link, cn.analysis, cn.date, cn.sentiment, c.name as company_name
             FROM competitors_news cn
             JOIN competitors c ON cn.competitor_id = c.id
             WHERE LOWER(c.name) = LOWER(%s)
-            AND cn.source = 'globenewswire'
             AND cn.created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
-            ORDER BY cn.published_date DESC, cn.created_at DESC
+            ORDER BY cn.date DESC, cn.created_at DESC
             LIMIT %s
             """
             values = (competitor_name, days, limit)
         else:
             query = """
-            SELECT cn.title, cn.url, cn.content, cn.published_date, cn.source,
-                   cn.summary, cn.sentiment, cn.key_topics, c.name as company_name
+            SELECT cn.title, cn.link, cn.analysis, cn.date, cn.sentiment, c.name as company_name
             FROM competitors_news cn
             JOIN competitors c ON cn.competitor_id = c.id
-            WHERE cn.source = 'globenewswire'
-            AND cn.created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
-            ORDER BY cn.published_date DESC, cn.created_at DESC
+            WHERE cn.created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+            ORDER BY cn.date DESC, cn.created_at DESC
             LIMIT %s
             """
             values = (days, limit)
@@ -268,14 +330,11 @@ class GlobeNewswireDataOperations:
                 for row in rows:
                     articles.append({
                         'title': row[0],
-                        'url': row[1],
-                        'content': row[2],
-                        'published_date': row[3],
-                        'source': row[4],
-                        'summary': row[5],
-                        'sentiment': row[6], 
-                        'key_topics': row[7],
-                        'company_name': row[8]
+                        'link': row[1],
+                        'analysis': row[2],
+                        'date': row[3],
+                        'sentiment': row[4],
+                        'company_name': row[5]
                     })
         
         return articles
@@ -295,13 +354,13 @@ class GlobeNewswireDataOperations:
             SELECT 
                 COUNT(*) as total_articles,
                 COUNT(DISTINCT competitor_id) as companies_covered,
-                AVG(confidence_score) as avg_confidence,
+                AVG(importance_grade) as avg_importance,
                 SUM(CASE WHEN sentiment = 'positive' THEN 1 ELSE 0 END) as positive_articles,
                 SUM(CASE WHEN sentiment = 'negative' THEN 1 ELSE 0 END) as negative_articles,
                 SUM(CASE WHEN sentiment = 'neutral' THEN 1 ELSE 0 END) as neutral_articles
             FROM competitors_news cn
             JOIN competitors c ON cn.competitor_id = c.id
-            WHERE LOWER(c.name) = LOWER(%s) AND cn.source = 'globenewswire'
+            WHERE LOWER(c.name) = LOWER(%s)
             """
             values = (competitor_name,)
         else:
@@ -309,12 +368,11 @@ class GlobeNewswireDataOperations:
             SELECT 
                 COUNT(*) as total_articles,
                 COUNT(DISTINCT competitor_id) as companies_covered,
-                AVG(confidence_score) as avg_confidence,
+                AVG(importance_grade) as avg_importance,
                 SUM(CASE WHEN sentiment = 'positive' THEN 1 ELSE 0 END) as positive_articles,
                 SUM(CASE WHEN sentiment = 'negative' THEN 1 ELSE 0 END) as negative_articles,
                 SUM(CASE WHEN sentiment = 'neutral' THEN 1 ELSE 0 END) as neutral_articles
             FROM competitors_news 
-            WHERE source = 'globenewswire'
             """
             values = None
         
@@ -329,7 +387,7 @@ class GlobeNewswireDataOperations:
                 return {
                     'total_articles': row[0] or 0,
                     'companies_covered': row[1] or 0,
-                    'avg_confidence': round(row[2] or 0.0, 2),
+                    'avg_importance': round(row[2] or 0.0, 2),
                     'positive_articles': row[3] or 0,
                     'negative_articles': row[4] or 0,
                     'neutral_articles': row[5] or 0
@@ -338,7 +396,7 @@ class GlobeNewswireDataOperations:
         return {
             'total_articles': 0,
             'companies_covered': 0, 
-            'avg_confidence': 0.0,
+            'avg_importance': 0.0,
             'positive_articles': 0,
             'negative_articles': 0,
             'neutral_articles': 0

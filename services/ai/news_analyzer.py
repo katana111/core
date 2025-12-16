@@ -50,27 +50,28 @@ class NewsAnalyzer:
 Title: {title}
 Content: {content}
 
-First, determine if this article is relevant for business intelligence. Only consider articles that discuss:
-- Company goals, successes, failures
-- Product releases or new features  
-- New contracts or partnerships
-- Acquisitions or investments
-- Collaborations or strategic initiatives
-- Financial results or funding
-- Leadership changes or corporate strategy
+First, determine if this article is relevant for business intelligence about {company_name}. Only consider articles that discuss:
+- {company_name}'s goals, successes, failures
+- {company_name}'s product releases or new features  
+- {company_name}'s new contracts or partnerships
+- Acquisitions or investments involving {company_name}
+- {company_name}'s collaborations or strategic initiatives
+- {company_name}'s financial results or funding
+- {company_name}'s leadership changes or corporate strategy
 
-If the article is NOT relevant (general industry news, opinion pieces, event listings, etc.), respond with: {{"relevant": false, "reason": "brief explanation"}}
+If the article is NOT specifically relevant to {company_name} (general industry news, mentions {company_name} only in passing, etc.), respond with: {{"relevant": false, "reason": "brief explanation"}}
 
-If the article IS relevant, provide a JSON response with:
+If the article IS relevant to {company_name}, provide a JSON response with:
 1. relevant: true
-2. title: If the provided title is longer than one sentence, create a concise one-sentence title. Otherwise, return the original title cleaned up.
-3. main_idea: Extract the main idea in exactly 2-3 clear sentences that capture the essence of what the company is doing/achieving
-4. sentiment: One of: positive, negative, neutral, mixed
-5. sentiment_score: A number from -1.0 (very negative) to 1.0 (very positive)
-6. key_topics: Array of 3-5 main business topics/themes (e.g., ["funding", "product launch", "partnership", "acquisition"])
-7. analysis: 2-3 sentence analysis of what this business development means for the company
-8. business_impact: One of: high, medium, low (based on strategic importance)
+2. title: Create a concise title that clearly shows how this relates to {company_name}. Format: "{company_name}: [action/achievement]" (e.g., "Seon: Closes $80M Series C Funding")
+3. main_idea: Extract the main idea in exactly 2-3 clear sentences focusing specifically on what {company_name} is doing/achieving/experiencing
+4. sentiment: One of: positive, negative, neutral, mixed (from {company_name}'s perspective)
+5. sentiment_score: A number from -1.0 (very negative) to 1.0 (very positive) for {company_name}
+6. key_topics: Array of 3-5 main business topics/themes specific to {company_name} (e.g., ["funding", "product launch", "partnership"])
+7. analysis: 2-3 sentence analysis of what this business development means specifically for {company_name}
+8. business_impact: One of: high, medium, low (based on strategic importance to {company_name})
 
+Focus ONLY on information directly related to {company_name}. Ignore general industry context.
 Respond ONLY with valid JSON, no other text."""
 
             headers = {
